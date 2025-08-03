@@ -10,13 +10,35 @@ def setup_database():
     cursor.execute("""CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, price INTEGER NOT NULL, description TEXT)""")
     cursor.execute("""CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, first_name TEXT, username TEXT, wallet_balance INTEGER DEFAULT 0)""")
     cursor.execute("""CREATE TABLE IF NOT EXISTS transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, product_id INTEGER NOT NULL, product_name TEXT, price INTEGER, status TEXT NOT NULL, timestamp TEXT NOT NULL, FOREIGN KEY (user_id) REFERENCES users (user_id), FOREIGN KEY (product_id) REFERENCES products (id))""")
-    cursor.execute("""CREATE TABLE IF NOT EXISTS user_links (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, transaction_id INTEGER NOT NULL, product_name TEXT, link TEXT NOT NULL, purchase_date TEXT NOT NULL, is_active BOOLEAN DEFAULT 1, FOREIGN KEY (user_id) REFERENCES users (user_id), FOREIGN KEY (transaction_id) REFERENCES transactions (id))""")
-    cursor.execute("""CREATE TABLE IF NOT EXISTS link_bank (id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL, link TEXT NOT NULL UNIQUE, is_used BOOLEAN DEFAULT 0, assigned_to_user_id INTEGER, assigned_transaction_id INTEGER, added_date TEXT NOT NULL, FOREIGN KEY (product_id) REFERENCES products (id))""")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS user_links (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, transaction_id INTEGER NOT NULL, product_name TEXT, link TEXT NOT NULL, purchase_date TEXT NOT NULL, expiry_date TEXT, is_active BOOLEAN DEFAULT 1, FOREIGN KEY (user_id) REFERENCES users (user_id), FOREIGN KEY (transaction_id) REFERENCES transactions (id))""")
+
+    # --- تعریف صحیح جدول بانک لینک ---
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS link_bank (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        product_id INTEGER NOT NULL,
+        link TEXT NOT NULL UNIQUE,
+        is_used BOOLEAN DEFAULT 0,
+        assigned_to_user_id INTEGER,
+        assigned_transaction_id INTEGER,
+        added_date TEXT NOT NULL,
+        assigned_date TEXT, -- ستون مورد نیاز که قبلا نبود
+        FOREIGN KEY (product_id) REFERENCES products (id)
+    )
+    """)
+
+    # (بخش اضافه کردن پلن‌های پیش‌فرض بدون تغییر است)
+    cursor.execute("SELECT COUNT(*) FROM products")
+    if cursor.fetchone()[0] == 0:
+        print("جدول محصولات خالی است. در حال اضافه کردن پلن‌های پیش‌فرض...")
+        default_plans = [('سرویس ۲۰ گیگ ۱ ماهه', 65000, 'حجم ۲۰ گیگابایت - اعتبار ۳۰ روز - بدون محدودیت کاربر'), ('سرویس ۳۰ گیگ ۱ ماهه', 85000, 'حجم ۳۰ گیگابایت - اعتبار ۳۰ روز - بدون محدودیت کاربر'), ('سرویس ۵۰ گیگ ۱ ماهه', 120000, 'حجم ۵۰ گیگابایت - اعتبار ۳۰ روز - بدون محدودیت کاربر'), ('سرویس ۷۰ گیگ ۱ ماهه', 150000, 'حجم ۷۰ گیگابایت - اعتبار ۳۰ روز - بدون محدودیت کاربر'), ('سرویس ۱۰۰ گیگ ۱ ماهه', 190000, 'حجم ۱۰۰ گیگابایت - اعتبار ۳۰ روز - بدون محدودیت کاربر')]
+        cursor.executemany("INSERT INTO products (name, price, description) VALUES (?, ?, ?)", default_plans)
+        print(f"{len(default_plans)} پلن جدید با موفقیت اضافه شد.")
+
     conn.commit()
     conn.close()
 
 def add_links_to_bank(product_id, links):
-    """لیستی از لینک‌ها را برای یک محصول خاص به بانک اضافه می‌کند."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     added_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -46,7 +68,6 @@ def fetch_and_assign_link(product_id, user_id, transaction_id):
     return result[1] if result else None
 
 def get_link_bank_status():
-    """تعداد لینک‌های باقی‌مانده برای هر محصول را برمی‌گرداند."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     cursor.execute("""
@@ -59,7 +80,6 @@ def get_link_bank_status():
     return status
 
 def get_product_id_by_name(product_name):
-    """ID یک محصول را با استفاده از نام آن پیدا می‌کند."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT id FROM products WHERE name = ?", (product_name,))
@@ -67,7 +87,7 @@ def get_product_id_by_name(product_name):
     conn.close()
     return result[0] if result else None
 
-# (کدهای کامل سایر توابع دیتابیس مانند add_or_update_user, get_products و... را اینجا قرار دهید)
+# (بقیه توابع دیتابیس بدون تغییر هستند)
 def add_or_update_user(user_id, first_name, username):
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
@@ -116,11 +136,13 @@ def update_transaction_status(transaction_id, status):
     conn.commit()
     conn.close()
 
-def save_user_link(user_id, transaction_id, product_name, link):
+def save_user_link(user_id, transaction_id, product_name, link, duration_days=30):
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
-    purchase_date = datetime.now().strftime("%Y-%m-%d")
-    cursor.execute("INSERT INTO user_links (user_id, transaction_id, product_name, link, purchase_date) VALUES (?, ?, ?, ?, ?)",(user_id, transaction_id, product_name, link, purchase_date))
+    from datetime import timedelta
+    purchase_date = datetime.now()
+    expiry_date = purchase_date + timedelta(days=duration_days)
+    cursor.execute("INSERT INTO user_links (user_id, transaction_id, product_name, link, purchase_date, expiry_date, is_active) VALUES (?, ?, ?, ?, ?, ?, 1)",(user_id, transaction_id, product_name, link, purchase_date.strftime("%Y-%m-%d"), expiry_date.strftime("%Y-%m-%d")))
     conn.commit()
     conn.close()
 
@@ -131,3 +153,13 @@ def get_user_links(user_id):
     links = cursor.fetchall()
     conn.close()
     return links
+
+def get_expiring_links(days_left=3):
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    from datetime import timedelta
+    target_date = datetime.now() + timedelta(days=days_left)
+    cursor.execute("SELECT ul.user_id, ul.product_name, t.product_id FROM user_links ul JOIN transactions t ON ul.transaction_id = t.id WHERE ul.expiry_date = ?",(target_date.strftime("%Y-%m-%d"),))
+    results = cursor.fetchall()
+    conn.close()
+    return results
