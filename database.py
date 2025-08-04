@@ -13,7 +13,15 @@ def setup_database():
     cursor.execute("""CREATE TABLE IF NOT EXISTS user_links (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, transaction_id INTEGER NOT NULL, product_name TEXT, link TEXT NOT NULL, purchase_date TEXT NOT NULL, expiry_date TEXT, is_active BOOLEAN DEFAULT 1, FOREIGN KEY (user_id) REFERENCES users (user_id), FOREIGN KEY (transaction_id) REFERENCES transactions (id))""")
     cursor.execute("""CREATE TABLE IF NOT EXISTS link_bank (id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL, link TEXT NOT NULL UNIQUE, is_used BOOLEAN DEFAULT 0, assigned_to_user_id INTEGER, assigned_transaction_id INTEGER, added_date TEXT NOT NULL, assigned_date TEXT, FOREIGN KEY (product_id) REFERENCES products (id))""")
     cursor.execute("""CREATE TABLE IF NOT EXISTS discount_codes (id INTEGER PRIMARY KEY AUTOINCREMENT, code_text TEXT NOT NULL UNIQUE, discount_type TEXT NOT NULL, value INTEGER NOT NULL, max_uses INTEGER DEFAULT 1, current_uses INTEGER DEFAULT 0, expiry_date TEXT, is_active BOOLEAN DEFAULT 1)""")
-
+    # در تابع setup_database
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS support_tickets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        channel_message_id INTEGER NOT NULL,
+        status TEXT DEFAULT 'open' -- 'open', 'closed'
+    )
+    """)
     cursor.execute("SELECT COUNT(*) FROM products")
     if cursor.fetchone()[0] == 0:
         print("جدول محصولات خالی است. در حال اضافه کردن پلن‌های پیش‌فرض...")
@@ -200,3 +208,26 @@ def list_all_codes():
     codes = cursor.fetchall()
     conn.close()
     return codes
+# در تابع setup_database
+def create_support_ticket(user_id, channel_message_id):
+    """یک تیکت پشتیبانی جدید را ثبت می‌کند."""
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO support_tickets (user_id, channel_message_id) VALUES (?, ?)",
+        (user_id, channel_message_id)
+    )
+    conn.commit()
+    conn.close()
+
+def get_user_from_ticket(channel_message_id):
+    """آیدی کاربر را از روی آیدی پیام در کانال پیدا می‌کند."""
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT user_id FROM support_tickets WHERE channel_message_id = ?",
+        (channel_message_id,)
+    )
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else None

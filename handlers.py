@@ -18,6 +18,7 @@ class State(Enum):
     SELECTING_PRODUCT, CONFIRMING_PURCHASE, AWAITING_RECEIPT, AWAITING_DISCOUNT_CODE = range(4)
     AWAITING_REJECTION_REASON = 11
     AWAITING_LINK_PRODUCT_CHOICE, AWAITING_LINKS_TO_ADD = range(20, 22)
+    AWAITING_SUPPORT_MESSAGE = 30
 
 # ==================================
 # === بخش صفحه اصلی و کاربر ===
@@ -59,14 +60,6 @@ async def my_purchases_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             text += f"🔹 **{product_name}** (خرید: {purchase_date})\n`{link}`\n\n"
     keyboard = [[InlineKeyboardButton("⬅️ بازگشت به داشبورد", callback_data="back_to_home")]]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown', disable_web_page_preview=True)
-
-async def support_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """اطلاعات پشتیبانی را نمایش می‌دهد."""
-    query = update.callback_query
-    await query.answer()
-    text = "📞 **پشتیبانی**\n\nبرای ارتباط با ما، لطفاً به آیدی @YourSupportID پیام دهید."
-    keyboard = [[InlineKeyboardButton("⬅️ بازگشت به داشبورد", callback_data="back_to_home")]]
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
 # ==================================
 # === فرآیند خرید کاربر ===
@@ -133,8 +126,7 @@ async def process_discount_code(update: Update, context: ContextTypes.DEFAULT_TY
     if discount:
         new_price = 0
         if discount['type'] == 'percent':
-            discount_amount = (price * discount['value']) // 100
-            new_price = price - discount_amount
+            new_price = price - ((price * discount['value']) // 100)
         elif discount['type'] == 'fixed':
             new_price = price - discount['value']
 
@@ -217,8 +209,50 @@ async def universal_cancel_and_go_home(update: Update, context: ContextTypes.DEF
     return ConversationHandler.END
 
 # ==================================
+# === سیستم تیکتینگ پشتیبانی ===
+# ==================================
+async def start_support_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    keyboard = [[InlineKeyboardButton("⬅️ لغو و بازگشت", callback_data="cancel_support")]]
+    await query.edit_message_text(
+        "لطفاً پیام خود را برای تیم پشتیبانی ارسال کنید. می‌توانید عکس هم بفرستید.",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return State.AWAITING_SUPPORT_MESSAGE
+
+async def forward_support_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user = update.effective_user
+    ticket_header = (f"📩 **تیکت پشتیبانی جدید**\n\n"
+                     f"👤 **از طرف:** {user.first_name} (@{user.username or 'ندارد'})\n"
+                     f"🆔 **آیدی کاربر:** `{user.id}`\n"
+                     f"➖➖➖")
+    await context.bot.send_message(chat_id=config.ADMIN_CHANNEL_ID, text=ticket_header, parse_mode='Markdown')
+    forwarded_message = await update.message.forward(chat_id=config.ADMIN_CHANNEL_ID)
+    db.create_support_ticket(user.id, forwarded_message.message_id)
+    await update.message.reply_text("✅ پیام شما با موفقیت برای تیم پشتیبانی ارسال شد. لطفاً منتظر پاسخ بمانید.")
+    return ConversationHandler.END
+
+async def cancel_support(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await show_home_menu(update, context)
+    return ConversationHandler.END
+
+# ==================================
 # === پنل ادمین ===
 # ==================================
+async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message.reply_to_message: return
+    replied_message_id = update.message.reply_to_message.message_id
+    target_user_id = db.get_user_from_ticket(replied_message_id)
+    if target_user_id:
+        admin_name = update.effective_user.first_name
+        try:
+            await context.bot.copy_message(chat_id=target_user_id, from_chat_id=update.message.chat_id, message_id=update.message.message_id)
+            await context.bot.send_message(chat_id=target_user_id, text=f"💬 پاسخ جدید از طرف پشتیبانی ({admin_name}).")
+            await update.message.reply_text("✅ پاسخ شما با موفقیت برای کاربر ارسال شد.")
+        except Exception as e:
+            await update.message.reply_text(f"❌ ارسال پیام به کاربر ناموفق بود: {e}")
+
 async def admin_approve_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
