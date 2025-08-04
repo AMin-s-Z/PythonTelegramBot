@@ -110,7 +110,8 @@ def main() -> None:
     application.add_handler(CommandHandler("start", h.start))
     application.add_handler(CallbackQueryHandler(h.my_purchases_handler, pattern="^my_purchases$"))
     application.add_handler(CallbackQueryHandler(h.universal_cancel_and_go_home, pattern="^back_to_home$"))
-
+    application.add_handler(CommandHandler("report", h.report_command, filters=filters.User(ADMIN_TELEGRAM_ID)))
+    application.add_handler(CallbackQueryHandler(h.generate_report_callback, pattern="^report_"))
     print("ربات با تمام قابلیت‌ها (شامل سیستم تیکتینگ) با موفقیت اجرا شد...")
     application.run_polling()
 

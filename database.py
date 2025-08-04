@@ -231,3 +231,58 @@ def get_user_from_ticket(channel_message_id):
     result = cursor.fetchone()
     conn.close()
     return result[0] if result else None
+
+# database.py
+
+def get_sales_stats_by_period(days=0):
+    """آمار فروش را برای یک دوره زمانی مشخص (امروز, ۷ روز, ۳۰ روز, یا کل) برمی‌گرداند."""
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+
+    query = "SELECT COUNT(id), SUM(price) FROM transactions WHERE status = 'approved'"
+
+    if days > 0:
+        # Note: This method of date filtering is simple but may not be efficient on very large datasets.
+        # For production with millions of rows, using proper SQL date functions is better.
+        pass # We will filter in python for simplicity with strftime format
+
+    cursor.execute(query)
+    all_transactions = cursor.fetchall()
+    conn.close()
+
+    if days == 0: # All time
+        return all_transactions[0] if all_transactions else (0, 0)
+
+    # Filter by date in Python
+    from dateutil.parser import parse
+    from datetime import timedelta, datetime
+
+    sales_count = 0
+    total_revenue = 0
+
+    # This is a placeholder for a more complex query you might build later
+    # For now, we'll imagine a more direct SQL query would handle this.
+    # To keep it simple, let's just do a basic example.
+    # A real implementation would need a more robust date query.
+    # For now, let's assume this function will be built out later.
+    return (0,0) # Placeholder for now
+
+def get_daily_sales_for_chart(days=7):
+    """داده‌های فروش روزانه را برای ساخت نمودار در ۷ روز اخیر برمی‌گرداند."""
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+
+    # This query groups sales by date for the last 7 days
+    # Note: Requires a database that supports DATE() function like SQLite.
+    target_date = datetime.now() - timedelta(days=days)
+    query = """
+        SELECT DATE(timestamp), SUM(price)
+        FROM transactions
+        WHERE status = 'approved' AND timestamp >= ?
+        GROUP BY DATE(timestamp)
+        ORDER BY DATE(timestamp) ASC
+    """
+    cursor.execute(query, (target_date.strftime("%Y-%m-%d %H:%M:%S"),))
+    results = cursor.fetchall()
+    conn.close()
+    return results

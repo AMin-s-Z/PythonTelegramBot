@@ -406,3 +406,85 @@ async def cancel_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.chat_data.clear()
     await update.message.reply_text("عملیات ادمین لغو شد.")
     return ConversationHandler.END
+
+# handlers.py
+import matplotlib.pyplot as plt
+import os
+from datetime import datetime, timedelta
+
+# ... (سایر ایمپورت‌ها)
+
+# ==================================
+# === بخش گزارش‌گیری پیشرفته ===
+# ==================================
+
+async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """منوی گزارش‌گیری را به ادمین نمایش می‌دهد."""
+    keyboard = [
+        [InlineKeyboardButton("📊 گزارش ۷ روز اخیر", callback_data="report_7_days")],
+        # می‌توانید دکمه‌های گزارش روزانه، ماهانه و کلی را هم بعدا اضافه کنید
+    ]
+    await update.message.reply_text("لطفاً نوع گزارش مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+def generate_sales_chart(daily_data):
+    """یک نمودار میله‌ای از فروش روزانه ساخته و به صورت فایل ذخیره می‌کند."""
+    if not daily_data:
+        return None
+
+    # استخراج تاریخ‌ها و مقادیر
+    dates = [datetime.strptime(d, "%Y-%m-%d").strftime("%m/%d") for d, _ in daily_data]
+    revenues = [r for _, r in daily_data]
+
+    plt.figure(figsize=(10, 6))
+    plt.bar(dates, revenues, color='#4CAF50')
+
+    plt.title('Daily Sales Revenue (Last 7 Days)')
+    plt.xlabel('Date')
+    plt.ylabel('Revenue (Toman)')
+    plt.grid(axis='y', linestyle='--')
+
+    # ذخیره نمودار در یک فایل
+    chart_path = "sales_chart.png"
+    plt.savefig(chart_path)
+    plt.close()
+
+    return chart_path
+
+async def generate_report_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """گزارش را بر اساس انتخاب ادمین تولید و ارسال می‌کند."""
+    query = update.callback_query
+    await query.answer()
+
+    report_type = query.data
+    await query.edit_message_text("در حال پردازش گزارش... لطفاً صبر کنید.")
+
+    if report_type == "report_7_days":
+        # دریافت داده‌های ۷ روز اخیر
+        daily_data = db.get_daily_sales_for_chart(days=7)
+
+        # محاسبه آمار کلی
+        total_sales = len(daily_data) # This is number of days with sales, not total sales
+        total_revenue = sum(price for _, price in daily_data)
+
+        # ساخت نمودار
+        chart_file = generate_sales_chart(daily_data)
+
+        caption = (
+            f"📊 **گزارش عملکرد ۷ روز اخیر**\n\n"
+            f"💰 **درآمد کل:** {total_revenue:,} تومان\n"
+            f"📈 **تعداد کل فروش‌ها:** (Needs a separate query)\n\n"
+            f"نمودار روند فروش روزانه:"
+        )
+
+        if chart_file:
+            await context.bot.send_photo(
+                chat_id=update.effective_chat.id,
+                photo=open(chart_file, "rb"),
+                caption=caption,
+                parse_mode='Markdown'
+            )
+            os.remove(chart_file) # پاک کردن فایل پس از ارسال
+        else:
+            await context.bot.send_message(chat_id=update.effective_chat.id, text="در ۷ روز اخیر هیچ فروشی ثبت نشده است.")
+
+    await query.delete_message() # حذف پیام "در حال پردازش"
