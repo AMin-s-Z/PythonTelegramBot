@@ -11,26 +11,25 @@ from config import TOKEN, ADMIN_TELEGRAM_ID
 import database as db
 import handlers as h
 
-# فعال‌سازی لاگ‌ها برای دیباگ کردن بهتر
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def main() -> None:
-    """ربات را راه‌اندازی و اجرا می‌کند."""
     db.setup_database()
-
     application = Application.builder().token(TOKEN).build()
 
-    # --- مکالمه ۱: فرآیند خرید کاربر ---
     purchase_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(h.start_purchase_flow, pattern="^go_to_purchase$")],
         states={
             h.State.SELECTING_PRODUCT: [CallbackQueryHandler(h.select_product, pattern=r"^product_\d+$")],
             h.State.CONFIRMING_PURCHASE: [
                 CallbackQueryHandler(h.show_payment_info, pattern="^confirm_payment_info$"),
+                CallbackQueryHandler(h.prompt_for_discount_code, pattern="^apply_discount_code$"),
                 CallbackQueryHandler(h.start_purchase_flow, pattern="^back_to_products$")
+            ],
+            h.State.AWAITING_DISCOUNT_CODE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, h.process_discount_code),
+                CallbackQueryHandler(h.select_product, pattern=r"^product_\d+$")
             ],
             h.State.AWAITING_RECEIPT: [
                 MessageHandler(filters.PHOTO, h.handle_receipt),
@@ -44,7 +43,6 @@ def main() -> None:
         conversation_timeout=1800
     )
 
-    # --- مکالمه ۲: فرآیند افزودن لینک توسط ادمین ---
     add_link_conv = ConversationHandler(
         entry_points=[CommandHandler("addlinks", h.add_links_start, filters=filters.User(ADMIN_TELEGRAM_ID))],
         states={
@@ -58,7 +56,6 @@ def main() -> None:
         conversation_timeout=600
     )
 
-    # --- مکالمه ۳: فرآیند رد کردن پرداخت توسط ادمین ---
     reject_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(h.admin_reject_start, pattern=r"^admin_reject_\d+$")],
         states={
@@ -69,7 +66,6 @@ def main() -> None:
     )
 
     # --- ثبت هندلرها ---
-    # مکالمه‌ها
     application.add_handler(purchase_conv)
     application.add_handler(add_link_conv)
     application.add_handler(reject_conv)
@@ -77,6 +73,8 @@ def main() -> None:
     # دستورات ادمین
     application.add_handler(CommandHandler("linkstatus", h.link_status_handler, filters=filters.User(ADMIN_TELEGRAM_ID)))
     application.add_handler(CommandHandler("backup", h.backup_database_handler, filters=filters.User(ADMIN_TELEGRAM_ID)))
+    application.add_handler(CommandHandler("addcode", h.add_code_command, filters=filters.User(ADMIN_TELEGRAM_ID)))
+    application.add_handler(CommandHandler("listcodes", h.list_codes_command, filters=filters.User(ADMIN_TELEGRAM_ID)))
 
     # دکمه‌های ادمین
     application.add_handler(CallbackQueryHandler(h.admin_approve_handler, pattern=r"^admin_approve_\d+$"))
@@ -87,7 +85,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(h.my_purchases_handler, pattern="^my_purchases$"))
     application.add_handler(CallbackQueryHandler(h.universal_cancel_and_go_home, pattern="^back_to_home$"))
 
-    print("ربات با تمام قابلیت‌ها با موفقیت اجرا شد...")
+    print("ربات آلبالو با تمام قابلیت‌ها با موفقیت اجرا شد...")
     application.run_polling()
 
 if __name__ == "__main__":
