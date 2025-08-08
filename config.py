@@ -1,7 +1,7 @@
 # config.py
 
 # توکن ربات تلگرام
-TOKEN = "8245434375:AAFyI4XxbPE3sZ3cFHPkHM7UR_I02bobow0"
+TOKEN = ""
 
 TELEGRAM_CHANNEL_URL = "https://t.me/albaloovpn_hiddify"
 
