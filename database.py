@@ -7,21 +7,29 @@ def setup_database():
     """جداول مورد نیاز را در پایگاه داده ایجاد و در صورت نیاز، محصولات اولیه را اضافه می‌کند."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
+
+    # ایجاد جدول کاربران با تمام ستون‌های لازم
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY,
+        first_name TEXT,
+        username TEXT,
+        wallet_balance INTEGER DEFAULT 0,
+        referred_by_user_id INTEGER,
+        first_purchase_completed BOOLEAN DEFAULT 0,
+        referral_rewards_claimed INTEGER DEFAULT 0
+    )
+    """)
+
+    # ایجاد سایر جداول
     cursor.execute("""CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, price INTEGER NOT NULL, description TEXT)""")
-    cursor.execute("""CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, first_name TEXT, username TEXT, wallet_balance INTEGER DEFAULT 0)""")
     cursor.execute("""CREATE TABLE IF NOT EXISTS transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, product_id INTEGER NOT NULL, product_name TEXT, price INTEGER, status TEXT NOT NULL, timestamp TEXT NOT NULL, FOREIGN KEY (user_id) REFERENCES users (user_id), FOREIGN KEY (product_id) REFERENCES products (id))""")
     cursor.execute("""CREATE TABLE IF NOT EXISTS user_links (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, transaction_id INTEGER NOT NULL, product_name TEXT, link TEXT NOT NULL, purchase_date TEXT NOT NULL, expiry_date TEXT, is_active BOOLEAN DEFAULT 1, FOREIGN KEY (user_id) REFERENCES users (user_id), FOREIGN KEY (transaction_id) REFERENCES transactions (id))""")
     cursor.execute("""CREATE TABLE IF NOT EXISTS link_bank (id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL, link TEXT NOT NULL UNIQUE, is_used BOOLEAN DEFAULT 0, assigned_to_user_id INTEGER, assigned_transaction_id INTEGER, added_date TEXT NOT NULL, assigned_date TEXT, FOREIGN KEY (product_id) REFERENCES products (id))""")
     cursor.execute("""CREATE TABLE IF NOT EXISTS discount_codes (id INTEGER PRIMARY KEY AUTOINCREMENT, code_text TEXT NOT NULL UNIQUE, discount_type TEXT NOT NULL, value INTEGER NOT NULL, max_uses INTEGER DEFAULT 1, current_uses INTEGER DEFAULT 0, expiry_date TEXT, is_active BOOLEAN DEFAULT 1)""")
-    # در تابع setup_database
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS support_tickets (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        channel_message_id INTEGER NOT NULL,
-        status TEXT DEFAULT 'open' -- 'open', 'closed'
-    )
-    """)
+    cursor.execute("""CREATE TABLE IF NOT EXISTS support_tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, channel_message_id INTEGER NOT NULL, status TEXT DEFAULT 'open')""")
+
+    # بخش اضافه کردن پلن‌های پیش‌فرض
     cursor.execute("SELECT COUNT(*) FROM products")
     if cursor.fetchone()[0] == 0:
         print("جدول محصولات خالی است. در حال اضافه کردن پلن‌های پیش‌فرض...")
@@ -38,49 +46,50 @@ def setup_database():
     conn.commit()
     conn.close()
 
-def validate_and_apply_code(code_text):
-    """
-    کد را بررسی کرده، در صورت معتبر بودن تعداد استفاده را یک واحد افزایش داده،
-    و اطلاعات تخفیف را برمی‌گرداند.
-    """
-    conn = sqlite3.connect(DATABASE_NAME)
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT id, discount_type, value, max_uses, current_uses, expiry_date FROM discount_codes WHERE code_text = ? AND is_active = 1",
-        (code_text.upper(),)
-    )
-    result = cursor.fetchone()
-
-    # اگر کد وجود نداشت
-    if not result:
-        conn.close()
-        return None
-
-    code_id, discount_type, value, max_uses, current_uses, expiry_date = result
-
-    # اگر تاریخ انقضا گذشته بود
-    if expiry_date and datetime.strptime(expiry_date, "%Y-%m-%d").date() < datetime.now().date():
-        conn.close()
-        return None
-
-    # اگر ظرفیت استفاده تمام شده بود
-    if current_uses >= max_uses:
-        conn.close()
-        return None
-
-    # افزایش تعداد استفاده از کد
-    cursor.execute("UPDATE discount_codes SET current_uses = current_uses + 1 WHERE id = ?", (code_id,))
-    conn.commit()
-    conn.close()
-
-    return {"type": discount_type, "value": value}
-
-# (بقیه توابع دیتابیس بدون تغییر هستند و به درستی کار می‌کنند)
-# ... (کدهای کامل سایر توابع از پاسخ‌های قبلی در اینجا قرار می‌گیرند)
 def add_or_update_user(user_id, first_name, username):
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO users (user_id, first_name, username) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET first_name=excluded.first_name, username=excluded.username", (user_id, first_name, username))
+    # ابتدا کاربر را با اطلاعات اولیه اضافه می‌کنیم یا در صورت وجود نادیده می‌گیریم
+    cursor.execute("INSERT OR IGNORE INTO users (user_id, first_name, username) VALUES (?, ?, ?)", (user_id, first_name, username))
+    # سپس اطلاعات او را در هر صورت آپدیت می‌کنیم
+    cursor.execute("UPDATE users SET first_name = ?, username = ? WHERE user_id = ?", (first_name, username, user_id))
+    conn.commit()
+    conn.close()
+
+def update_user_referrer(user_id, referrer_id):
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET referred_by_user_id = ? WHERE user_id = ?", (referrer_id, user_id))
+    conn.commit()
+    conn.close()
+
+def get_user_info(user_id):
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT referred_by_user_id, first_purchase_completed, referral_rewards_claimed FROM users WHERE user_id = ?", (user_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result
+
+def mark_first_purchase_complete(user_id):
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET first_purchase_completed = 1 WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+def count_successful_referrals(referrer_id):
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM users WHERE referred_by_user_id = ? AND first_purchase_completed = 1", (referrer_id,))
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
+
+def increment_rewards_claimed(user_id):
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET referral_rewards_claimed = referral_rewards_claimed + 1 WHERE user_id = ?", (user_id,))
     conn.commit()
     conn.close()
 
@@ -145,7 +154,7 @@ def save_user_link(user_id, transaction_id, product_name, link, duration_days=30
 def get_user_links(user_id):
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT product_name, link, purchase_date FROM user_links WHERE user_id = ? AND is_active = 1",(user_id,))
+    cursor.execute("SELECT id, product_name, link, purchase_date FROM user_links WHERE user_id = ? AND is_active = 1",(user_id,))
     links = cursor.fetchall()
     conn.close()
     return links
@@ -201,6 +210,28 @@ def create_discount_code(code_text, discount_type, value, max_uses=1, expiry_dat
     finally:
         conn.close()
 
+def validate_and_apply_code(code_text):
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, discount_type, value, max_uses, current_uses, expiry_date FROM discount_codes WHERE code_text = ? AND is_active = 1", (code_text.upper(),))
+    result = cursor.fetchone()
+    if not result:
+        conn.close(); return None
+
+    code_id, discount_type, value, max_uses, current_uses, expiry_date = result
+
+    if expiry_date and datetime.strptime(expiry_date, "%Y-%m-%d").date() < datetime.now().date():
+        conn.close(); return None
+
+    if current_uses >= max_uses:
+        conn.close(); return None
+
+    cursor.execute("UPDATE discount_codes SET current_uses = current_uses + 1 WHERE id = ?", (code_id,))
+    conn.commit()
+    conn.close()
+
+    return {"type": discount_type, "value": value}
+
 def list_all_codes():
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
@@ -208,81 +239,18 @@ def list_all_codes():
     codes = cursor.fetchall()
     conn.close()
     return codes
-# در تابع setup_database
+
 def create_support_ticket(user_id, channel_message_id):
-    """یک تیکت پشتیبانی جدید را ثبت می‌کند."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO support_tickets (user_id, channel_message_id) VALUES (?, ?)",
-        (user_id, channel_message_id)
-    )
+    cursor.execute("INSERT INTO support_tickets (user_id, channel_message_id) VALUES (?, ?)", (user_id, channel_message_id))
     conn.commit()
     conn.close()
 
 def get_user_from_ticket(channel_message_id):
-    """آیدی کاربر را از روی آیدی پیام در کانال پیدا می‌کند."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT user_id FROM support_tickets WHERE channel_message_id = ?",
-        (channel_message_id,)
-    )
+    cursor.execute("SELECT user_id FROM support_tickets WHERE channel_message_id = ?", (channel_message_id,))
     result = cursor.fetchone()
     conn.close()
     return result[0] if result else None
-
-# database.py
-
-def get_sales_stats_by_period(days=0):
-    """آمار فروش را برای یک دوره زمانی مشخص (امروز, ۷ روز, ۳۰ روز, یا کل) برمی‌گرداند."""
-    conn = sqlite3.connect(DATABASE_NAME)
-    cursor = conn.cursor()
-
-    query = "SELECT COUNT(id), SUM(price) FROM transactions WHERE status = 'approved'"
-
-    if days > 0:
-        # Note: This method of date filtering is simple but may not be efficient on very large datasets.
-        # For production with millions of rows, using proper SQL date functions is better.
-        pass # We will filter in python for simplicity with strftime format
-
-    cursor.execute(query)
-    all_transactions = cursor.fetchall()
-    conn.close()
-
-    if days == 0: # All time
-        return all_transactions[0] if all_transactions else (0, 0)
-
-    # Filter by date in Python
-    from dateutil.parser import parse
-    from datetime import timedelta, datetime
-
-    sales_count = 0
-    total_revenue = 0
-
-    # This is a placeholder for a more complex query you might build later
-    # For now, we'll imagine a more direct SQL query would handle this.
-    # To keep it simple, let's just do a basic example.
-    # A real implementation would need a more robust date query.
-    # For now, let's assume this function will be built out later.
-    return (0,0) # Placeholder for now
-
-def get_daily_sales_for_chart(days=7):
-    """داده‌های فروش روزانه را برای ساخت نمودار در ۷ روز اخیر برمی‌گرداند."""
-    conn = sqlite3.connect(DATABASE_NAME)
-    cursor = conn.cursor()
-
-    # This query groups sales by date for the last 7 days
-    # Note: Requires a database that supports DATE() function like SQLite.
-    target_date = datetime.now() - timedelta(days=days)
-    query = """
-        SELECT DATE(timestamp), SUM(price)
-        FROM transactions
-        WHERE status = 'approved' AND timestamp >= ?
-        GROUP BY DATE(timestamp)
-        ORDER BY DATE(timestamp) ASC
-    """
-    cursor.execute(query, (target_date.strftime("%Y-%m-%d %H:%M:%S"),))
-    results = cursor.fetchall()
-    conn.close()
-    return results

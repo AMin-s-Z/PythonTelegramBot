@@ -1,4 +1,6 @@
 import re
+import random
+import string
 from enum import Enum
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -24,13 +26,13 @@ class State(Enum):
 # === بخش صفحه اصلی و کاربر ===
 # ==================================
 async def show_home_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """صفحه اصلی (داشبورد) را به کاربر نمایش می‌دهد."""
     user = update.effective_user
     db.add_or_update_user(user.id, user.first_name, user.username)
     text = f"سلام {user.first_name} عزیز! 👋\nبه ربات فروش آلبالو خوش آمدید."
     keyboard = [
         [InlineKeyboardButton("🛍 خرید سرویس جدید", callback_data="go_to_purchase")],
         [InlineKeyboardButton("📁 خریدهای من", callback_data="my_purchases")],
+        [InlineKeyboardButton("🎁 معرفی دوستان", callback_data="referral")],
         [
             InlineKeyboardButton("📢 کانال تلگرام", url=config.TELEGRAM_CHANNEL_URL),
             InlineKeyboardButton("📞 پشتیبانی", callback_data="support")
@@ -44,11 +46,23 @@ async def show_home_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """دستور /start را مدیریت کرده و به صفحه اصلی می‌برد."""
+    user = update.effective_user
+    db.add_or_update_user(user.id, user.first_name, user.username)
+
+    if context.args and context.args[0].startswith('ref_'):
+        referrer_id = context.args[0].split('_')[1]
+        if str(user.id) != referrer_id:
+            existing_user_info = db.get_user_info(user.id)
+            if existing_user_info and existing_user_info[0] is None:
+                db.update_user_referrer(user.id, int(referrer_id))
+                try:
+                    await context.bot.send_message(chat_id=int(referrer_id), text=f"🎉 یک کاربر جدید ({user.first_name}) با لینک شما وارد ربات شد!")
+                except Exception as e:
+                    print(f"Failed to notify referrer {referrer_id}: {e}")
+
     await show_home_menu(update, context)
 
 async def my_purchases_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """لینک‌های خریداری شده کاربر را نمایش می‌دهد."""
     query = update.callback_query
     await query.answer()
     user_links = db.get_user_links(update.effective_user.id)
@@ -56,10 +70,27 @@ async def my_purchases_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         text = "شما تاکنون هیچ خرید فعالی نداشته‌اید."
     else:
         text = "📄 **لیست سرویس‌های فعال شما:**\n\n"
-        for _, product_name, link, purchase_date in enumerate(user_links, 1):
+        for _, _, product_name, link, purchase_date in enumerate(user_links, 1):
             text += f"🔹 **{product_name}** (خرید: {purchase_date})\n`{link}`\n\n"
     keyboard = [[InlineKeyboardButton("⬅️ بازگشت به داشبورد", callback_data="back_to_home")]]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown', disable_web_page_preview=True)
+
+async def referral_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = update.effective_user.id
+    referral_link = f"https://t.me/{context.bot.username}?start=ref_{user_id}"
+    successful_refs = db.count_successful_referrals(user_id)
+
+    text = (
+        "💌 **دوستان خود را دعوت کنید و سرویس رایگان هدیه بگیرید!**\n\n"
+        "با لینک زیر دوستان خود را به ربات دعوت کنید. به ازای هر **۵ نفر** از دوستانتان که اولین خرید خود را تکمیل کنند، یک **سرویس ۳۰ گیگ یک ماهه رایگان** به شما هدیه داده می‌شود.\n\n"
+        f"تعداد دعوت‌های موفق شما تاکنون: **{successful_refs} نفر**\n\n"
+        "لینک دعوت شما (برای کپی لمس کنید):\n"
+        f"`{referral_link}`"
+    )
+    keyboard = [[InlineKeyboardButton("⬅️ بازگشت به داشبورد", callback_data="back_to_home")]]
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
 # ==================================
 # === فرآیند خرید کاربر ===
@@ -109,16 +140,6 @@ async def process_discount_code(update: Update, context: ContextTypes.DEFAULT_TY
 
     if context.user_data.get('discount_code'):
         await update.message.reply_text("شما قبلاً یک کد تخفیف اعمال کرده‌اید.")
-        # Re-show the confirmation message
-        final_price = context.user_data.get('final_price', price)
-        text = (f"✅ کد تخفیف قبلاً اعمال شده.\n\n"
-                f"قیمت اصلی: ~~{price:,} تومان~~\n"
-                f"**قیمت نهایی: {final_price:,} تومان**\n\n"
-                "آیا خرید را با این قیمت تایید می‌کنید؟")
-        keyboard = [[InlineKeyboardButton("✅ بله، ادامه و پرداخت", callback_data='confirm_payment_info')],
-                    [InlineKeyboardButton("⬅️ بازگشت", callback_data=f"product_{context.user_data['selected_product_id']}")]
-                    ]
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
         return State.CONFIRMING_PURCHASE
 
     discount = db.validate_and_apply_code(code_text)
@@ -215,10 +236,7 @@ async def start_support_conversation(update: Update, context: ContextTypes.DEFAU
     query = update.callback_query
     await query.answer()
     keyboard = [[InlineKeyboardButton("⬅️ لغو و بازگشت", callback_data="cancel_support")]]
-    await query.edit_message_text(
-        "لطفاً پیام خود را برای تیم پشتیبانی ارسال کنید. می‌توانید عکس هم بفرستید.",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await query.edit_message_text("لطفاً پیام خود را برای تیم پشتیبانی ارسال کنید. می‌توانید عکس هم بفرستید.", reply_markup=InlineKeyboardMarkup(keyboard))
     return State.AWAITING_SUPPORT_MESSAGE
 
 async def forward_support_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -263,15 +281,37 @@ async def admin_approve_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_caption(caption="خطا: این تراکنش قبلاً پردازش شده یا نامعتبر است.")
         return
 
-    user_id, product_name, _, product_id = transaction_info
-    link = db.fetch_and_assign_link(product_id, user_id, transaction_id)
+    buyer_user_id, product_name, _, product_id = transaction_info
+    link = db.fetch_and_assign_link(product_id, buyer_user_id, transaction_id)
 
     if link:
         db.update_transaction_status(transaction_id, 'approved')
-        db.save_user_link(user_id, transaction_id, product_name, link)
-        await context.bot.send_message(chat_id=user_id, text=f"✅ سرویس شما تایید و فعال شد!\n\nلینک اتصال:\n`{link}`", parse_mode='Markdown')
+        db.save_user_link(buyer_user_id, transaction_id, product_name, link)
+        await context.bot.send_message(chat_id=buyer_user_id, text=f"✅ سرویس شما تایید و فعال شد!\n\nلینک اتصال:\n`{link}`", parse_mode='Markdown')
         final_caption = f"✅ **تایید و ارسال شد**\nمحصول: {product_name}\nشناسه: {transaction_id}\nتوسط: {update.effective_user.first_name}"
         await query.edit_message_caption(caption=final_caption, parse_mode='Markdown', reply_markup=None)
+
+        buyer_info = db.get_user_info(buyer_user_id)
+        if buyer_info:
+            referrer_id, first_purchase_done, _ = buyer_info
+
+            if referrer_id and not first_purchase_done:
+                db.mark_first_purchase_complete(buyer_user_id)
+                successful_refs_count = db.count_successful_referrals(referrer_id)
+                referrer_info = db.get_user_info(referrer_id)
+                rewards_claimed = referrer_info[2] if referrer_info else 0
+
+                if (successful_refs_count // 5) > rewards_claimed:
+                    reward_product_name = "سرویس ۳۰ گیگ ۱ ماهه"
+                    reward_product_id = db.get_product_id_by_name(reward_product_name)
+                    if reward_product_id:
+                        reward_link = db.fetch_and_assign_link(reward_product_id, referrer_id, 0)
+                        if reward_link:
+                            db.save_user_link(referrer_id, 0, f"هدیه زیرمجموعه - {reward_product_name}", reward_link)
+                            await context.bot.send_message(chat_id=referrer_id, text=(f"🎁 **شما یک سرویس هدیه دریافت کردید!**\n\nبه دلیل تکمیل خرید ۵ نفر از دوستانتان، یک «سرویس ۳۰ گیگ ۱ ماهه» به شما هدیه داده شد:\n`{reward_link}`"), parse_mode='Markdown')
+                            db.increment_rewards_claimed(referrer_id)
+                        else:
+                            await context.bot.send_message(chat_id=config.ADMIN_TELEGRAM_ID, text=f"⚠️ خطا: امکان تحویل هدیه به کاربر `{referrer_id}` وجود نداشت. موجودی بانک لینک برای سرویس ۳۰ گیگ تمام شده است.")
     else:
         await query.answer("⚠️ موجودی بانک لینک برای این محصول صفر است!", show_alert=True)
         await context.bot.send_message(chat_id=update.effective_user.id, text=f"خطا: موجودی لینک برای «{product_name}» تمام شده. لطفاً با /addlinks شارژ کنید.")
@@ -406,85 +446,3 @@ async def cancel_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.chat_data.clear()
     await update.message.reply_text("عملیات ادمین لغو شد.")
     return ConversationHandler.END
-
-# handlers.py
-import matplotlib.pyplot as plt
-import os
-from datetime import datetime, timedelta
-
-# ... (سایر ایمپورت‌ها)
-
-# ==================================
-# === بخش گزارش‌گیری پیشرفته ===
-# ==================================
-
-async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """منوی گزارش‌گیری را به ادمین نمایش می‌دهد."""
-    keyboard = [
-        [InlineKeyboardButton("📊 گزارش ۷ روز اخیر", callback_data="report_7_days")],
-        # می‌توانید دکمه‌های گزارش روزانه، ماهانه و کلی را هم بعدا اضافه کنید
-    ]
-    await update.message.reply_text("لطفاً نوع گزارش مورد نظر خود را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-def generate_sales_chart(daily_data):
-    """یک نمودار میله‌ای از فروش روزانه ساخته و به صورت فایل ذخیره می‌کند."""
-    if not daily_data:
-        return None
-
-    # استخراج تاریخ‌ها و مقادیر
-    dates = [datetime.strptime(d, "%Y-%m-%d").strftime("%m/%d") for d, _ in daily_data]
-    revenues = [r for _, r in daily_data]
-
-    plt.figure(figsize=(10, 6))
-    plt.bar(dates, revenues, color='#4CAF50')
-
-    plt.title('Daily Sales Revenue (Last 7 Days)')
-    plt.xlabel('Date')
-    plt.ylabel('Revenue (Toman)')
-    plt.grid(axis='y', linestyle='--')
-
-    # ذخیره نمودار در یک فایل
-    chart_path = "sales_chart.png"
-    plt.savefig(chart_path)
-    plt.close()
-
-    return chart_path
-
-async def generate_report_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """گزارش را بر اساس انتخاب ادمین تولید و ارسال می‌کند."""
-    query = update.callback_query
-    await query.answer()
-
-    report_type = query.data
-    await query.edit_message_text("در حال پردازش گزارش... لطفاً صبر کنید.")
-
-    if report_type == "report_7_days":
-        # دریافت داده‌های ۷ روز اخیر
-        daily_data = db.get_daily_sales_for_chart(days=7)
-
-        # محاسبه آمار کلی
-        total_sales = len(daily_data) # This is number of days with sales, not total sales
-        total_revenue = sum(price for _, price in daily_data)
-
-        # ساخت نمودار
-        chart_file = generate_sales_chart(daily_data)
-
-        caption = (
-            f"📊 **گزارش عملکرد ۷ روز اخیر**\n\n"
-            f"💰 **درآمد کل:** {total_revenue:,} تومان\n"
-            f"📈 **تعداد کل فروش‌ها:** (Needs a separate query)\n\n"
-            f"نمودار روند فروش روزانه:"
-        )
-
-        if chart_file:
-            await context.bot.send_photo(
-                chat_id=update.effective_chat.id,
-                photo=open(chart_file, "rb"),
-                caption=caption,
-                parse_mode='Markdown'
-            )
-            os.remove(chart_file) # پاک کردن فایل پس از ارسال
-        else:
-            await context.bot.send_message(chat_id=update.effective_chat.id, text="در ۷ روز اخیر هیچ فروشی ثبت نشده است.")
-
-    await query.delete_message() # حذف پیام "در حال پردازش"

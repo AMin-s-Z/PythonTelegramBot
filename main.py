@@ -11,16 +11,11 @@ from config import TOKEN, ADMIN_TELEGRAM_ID, ADMIN_CHANNEL_ID
 import database as db
 import handlers as h
 
-# فعال‌سازی لاگ‌ها برای دیباگ کردن بهتر
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def main() -> None:
-    """ربات را راه‌اندازی و اجرا می‌کند."""
     db.setup_database()
-
     application = Application.builder().token(TOKEN).build()
 
     # --- مکالمه ۱: فرآیند خرید کاربر ---
@@ -77,42 +72,35 @@ def main() -> None:
     support_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(h.start_support_conversation, pattern="^support$")],
         states={
-            h.State.AWAITING_SUPPORT_MESSAGE: [
-                MessageHandler(filters.TEXT | filters.PHOTO, h.forward_support_message)
-            ]
+            h.State.AWAITING_SUPPORT_MESSAGE: [MessageHandler(filters.TEXT | filters.PHOTO, h.forward_support_message)]
         },
         fallbacks=[CallbackQueryHandler(h.cancel_support, pattern="^cancel_support$")],
         conversation_timeout=600
     )
 
     # --- هندلر پاسخگویی ادمین در کانال ---
-    admin_reply_handler = MessageHandler(
-        filters.REPLY & filters.Chat(chat_id=int(ADMIN_CHANNEL_ID)),
-        h.handle_admin_reply
-    )
+    admin_reply_handler = MessageHandler(filters.REPLY & filters.Chat(chat_id=int(ADMIN_CHANNEL_ID)), h.handle_admin_reply)
 
-    # --- ثبت تمام هندلرها ---
-    # مکالمه‌ها
+    # --- ثبت هندلرها ---
     application.add_handler(purchase_conv)
     application.add_handler(add_link_conv)
     application.add_handler(reject_conv)
     application.add_handler(support_conv)
 
-    # هندلرهای ادمین
     application.add_handler(CommandHandler("linkstatus", h.link_status_handler, filters=filters.User(ADMIN_TELEGRAM_ID)))
     application.add_handler(CommandHandler("backup", h.backup_database_handler, filters=filters.User(ADMIN_TELEGRAM_ID)))
     application.add_handler(CommandHandler("addcode", h.add_code_command, filters=filters.User(ADMIN_TELEGRAM_ID)))
     application.add_handler(CommandHandler("listcodes", h.list_codes_command, filters=filters.User(ADMIN_TELEGRAM_ID)))
+
     application.add_handler(CallbackQueryHandler(h.admin_approve_handler, pattern=r"^admin_approve_\d+$"))
     application.add_handler(admin_reply_handler)
 
-    # دستورات و دکمه‌های عمومی کاربر
     application.add_handler(CommandHandler("start", h.start))
     application.add_handler(CallbackQueryHandler(h.my_purchases_handler, pattern="^my_purchases$"))
     application.add_handler(CallbackQueryHandler(h.universal_cancel_and_go_home, pattern="^back_to_home$"))
-    application.add_handler(CommandHandler("report", h.report_command, filters=filters.User(ADMIN_TELEGRAM_ID)))
-    application.add_handler(CallbackQueryHandler(h.generate_report_callback, pattern="^report_"))
-    print("ربات با تمام قابلیت‌ها (شامل سیستم تیکتینگ) با موفقیت اجرا شد...")
+    application.add_handler(CallbackQueryHandler(h.referral_handler, pattern="^referral$"))
+
+    print("ربات آلبالو با تمام قابلیت‌ها با موفقیت اجرا شد...")
     application.run_polling()
 
 if __name__ == "__main__":
